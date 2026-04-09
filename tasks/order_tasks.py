@@ -21,17 +21,14 @@ async def cancel_unpaid_orders_task() -> None:
     try:
         # Buka sesi database asinkron
         async with get_db_session() as session:
-            # ⚡ TACTICAL FIX: Menggunakan FOR UPDATE SKIP LOCKED
+            # Query SQLAlchemy 2.0 Style
             stmt = select(Order.id).where(
                 Order.status == 'pending_payment',
                 Order.created_at <= threshold_time
-            ).with_for_update(skip_locked=True).limit(50) # Batching & Anti-Deadlock
+            ).limit(50) # Batching untuk efisiensi memori
 
             result = await session.execute(stmt)
             order_ids = result.scalars().all()
-            
-        # ⚡ PENTING: Blok 'async with' berakhir di sini. Sesi DB ditutup dan Lock dilepas.
-        # Ini mencegah Node.js macet saat Worker memanggil API 'trigger_auto_cancel' di bawah.
 
         if not order_ids:
             logger.debug("Tidak ada Unpaid Orders yang perlu dibatalkan saat ini.")
@@ -67,16 +64,13 @@ async def auto_complete_shipped_orders_task() -> None:
 
     try:
         async with get_db_session() as session:
-            # ⚡ TACTICAL FIX: Menggunakan FOR UPDATE SKIP LOCKED
             stmt = select(Order.id).where(
                 Order.status == 'shipped',
                 Order.updated_at <= threshold_time
-            ).with_for_update(skip_locked=True).limit(50)
+            ).limit(50)
 
             result = await session.execute(stmt)
             order_ids = result.scalars().all()
-
-        # ⚡ Lock dilepas di sini.
 
         if not order_ids:
             logger.debug("Tidak ada Shipped Orders yang perlu diselesaikan saat ini.")

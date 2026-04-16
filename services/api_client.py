@@ -95,7 +95,7 @@ class AnalogAPIClient:
                 # ERROR 4xx (Misal: 400 Bad Request, 404 Not Found, 403 Forbidden)
                 # Kesalahan logika/data -> Catat di Log, tapi JANGAN DI-RETRY.
                 logger.error(f"Client Error {status_code} di {path}: {e.response.text}")
-                return None # Mengembalikan None agar Worker bisa lanjut ke Order ID berikutnya
+                return None # Mengembalikan None agar Worker bisa lanjut
             else:
                 # ERROR 5xx -> Lemparkan kembali agar ditangkap oleh Tenacity (Retry)
                 logger.error(f"Server Error {status_code} di {path}. Node.js bermasalah.")
@@ -106,6 +106,11 @@ class AnalogAPIClient:
             logger.error(f"Network Error saat menghubungi {path}: {str(e)}")
             raise e
 
+    async def post_internal(self, path: str, data: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """
+        Alias untuk post_request agar sinkron dengan pemanggilan di grading_tasks.py
+        """
+        return await self.post_request(path, data)
 
     # ==========================================
     # INTEGRATION TASKS (API CALLERS)
@@ -122,10 +127,18 @@ class AnalogAPIClient:
     async def trigger_auto_complete(self, order_id: str) -> Optional[Dict[str, Any]]:
         """
         Memanggil API Node.js untuk menyelesaikan pesanan dan merilis Escrow (>48 jam dikirim).
-        (Asumsi endpoint ini akan kita buat nanti di Node.js).
         """
         path = f"/api/internal/auto-complete/{order_id}"
         logger.info(f"[TASK] Mengirim instruksi Auto-Complete untuk Order ID: {order_id}")
+        return await self.post_request(path)
+
+    async def trigger_expire_grading(self, ticket_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Memanggil API Node.js untuk menghanguskan tiket verifikasi premium (grading)
+        yang tidak dilanjutkan ke pembayaran dalam waktu 3x24 jam.
+        """
+        path = f"/api/internal/grading/{ticket_id}/expire"
+        logger.info(f"[TASK] Mengirim instruksi Expire Grading untuk Tiket ID: {ticket_id}")
         return await self.post_request(path)
 
 

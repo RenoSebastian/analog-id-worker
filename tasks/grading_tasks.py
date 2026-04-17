@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
-from database import SessionLocal
+from database import AsyncSessionLocal
 from models import GradingRequest
 from logger import logger
 
@@ -14,7 +14,7 @@ async def expire_stale_grading_task():
     dan tidak di-checkout oleh pembeli dalam waktu 3x24 Jam (72 Jam).
     """
     logger.info("Memulai cronjob: Pengecekan tiket verifikasi premium kedaluwarsa...")
-    db: Session = SessionLocal()
+    db: Session = AsyncSessionLocal()
     
     try:
         # Kalkulasi batas waktu (TTL = 3 Hari)

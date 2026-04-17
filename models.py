@@ -97,3 +97,18 @@ class AuctionBid(Base):
     status = Column(String, nullable=False, default='VALID')
     # Tabel append-only ini hanya memiliki created_at
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class User(Base):
+    """
+    SHADOW MODEL: Tabel Users.
+    Diperlukan Worker untuk mengecek profil pemenang atau menambahkan penalti (Flagging).
+    """
+    __tablename__ = "users"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Tambahkan kolom ini jika Anda sudah menjalankan Fase 1 dari Roadmap Audit:
+    # auction_penalty_count = Column(Integer, nullable=False, default=0)
+    
+    # Kolom opsional lain yang mungkin worker butuhkan untuk notifikasi
+    # email = Column(String, nullable=False)
+    # name = Column(String, nullable=False)

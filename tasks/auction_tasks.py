@@ -4,11 +4,10 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import and_
-import redis.asyncio as redis # Menggunakan asyncio Redis client
+import redis.asyncio as redis 
 
 from database import AsyncSessionLocal
-from models import Auction, AuctionBid, Product, Order # Hapus User jika memang belum didefinisikan
-
+from models import Auction, AuctionBid, Product, Order 
 from config import settings 
 
 # Inisialisasi Logger
@@ -24,20 +23,17 @@ def _get_current_time():
     """Helper untuk mock/testing waktu"""
     return datetime.utcnow()
 
-# ⚡ FIX 1: Ubah menjadi async def
 async def task_freeze_nearing_auctions():
     """
     Cron: Berjalan setiap detik / 5 detik.
     Mencari lelang yang waktu end_time-nya tersisa <= 15 detik.
     Mengunci (Freeze) di Redis agar Socket.io Node.js menolak bid baru.
     """
-    # ⚡ FIX 2: Gunakan async with agar session otomatis ditutup (db.close() tidak perlu lagi)
     async with AsyncSessionLocal() as db:
         try:
             now = _get_current_time()
             freeze_threshold = now + timedelta(seconds=15)
 
-            # ⚡ FIX 3: Gunakan select() dan await db.execute()
             stmt = select(Auction).where(
                 and_(
                     Auction.status == 'ACTIVE',
@@ -48,7 +44,7 @@ async def task_freeze_nearing_auctions():
             auctions_to_freeze = result.scalars().all()
 
             for auction in auctions_to_freeze:
-                # 1. Kunci State di Redis (Wajib di-await karena menggunakan redis.asyncio)
+                # 1. Kunci State di Redis 
                 freeze_key = f"auction:{auction.id}:freeze"
                 await redis_client.set(freeze_key, '1')
 
@@ -58,10 +54,10 @@ async def task_freeze_nearing_auctions():
                 logger.info(f"[FREEZE] Lelang {auction.id} dikunci 15 detik sebelum berakhir.")
             
             if auctions_to_freeze:
-                await db.commit() # ⚡ FIX 4: Await commit
+                await db.commit() 
 
         except Exception as e:
-            await db.rollback() # ⚡ FIX 5: Await rollback
+            await db.rollback() 
             logger.error(f"[FREEZE ERROR] Terjadi kesalahan: {str(e)}")
 
 
@@ -87,13 +83,13 @@ async def task_evaluate_winners():
             for auction in evaluations:
                 auction_id = str(auction.id)
                 
-                # 1. Tarik Data Final dari Redis Memory (Wajib di-await)
+                # 1. Tarik Data Final dari Redis Memory
                 final_price = await redis_client.get(f"auction:{auction_id}:price")
                 winner_id = await redis_client.get(f"auction:{auction_id}:winner")
 
                 # Update status awal ke EVALUATION untuk mencegah double-processing
                 auction.status = 'EVALUATION'
-                await db.flush() # Menggunakan flush agar perubahan state tersimpan sementara di memori transaksi
+                await db.flush() 
 
                 if not winner_id:
                     auction.status = 'FAILED'
@@ -147,7 +143,7 @@ async def task_evaluate_winners():
                     
                     logger.info(f"[EVALUATION] Lelang {auction_id} SELESAI. Pemenang: {winner_id} - Rp{final_price}")
 
-                # 2. Cleanup Redis Memory (Wajib di-await)
+                # 2. Cleanup Redis Memory 
                 keys_to_delete = await redis_client.keys(f"auction:{auction_id}:*")
                 if keys_to_delete:
                     await redis_client.delete(*keys_to_delete)

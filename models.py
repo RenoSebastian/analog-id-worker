@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Numeric
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, ENUM
 from database import Base
 
 class Order(Base):
@@ -30,8 +30,6 @@ class Order(Base):
     product_width = Column(Integer, nullable=False, default=0)
     product_height = Column(Integer, nullable=False, default=0)
 
-    # Note: Menggunakan argumen string 'created_at' agar SQLAlchemy mapping tepat ke nama kolom di DB 
-    # (karena Node.js Sequelize menggunakan underscored: true)
     created_at = Column("created_at", DateTime, default=datetime.utcnow)
     updated_at = Column("updated_at", DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -67,6 +65,13 @@ class Product(Base):
     is_locked = Column(Boolean, nullable=False, default=False)
 
 
+# DEFINISI ENUM POSTGRESQL (CRUCIAL FIX)
+auction_status_enum = ENUM(
+    'DRAFT', 'ACTIVE', 'FREEZE', 'EVALUATION', 'COMPLETED', 'FAILED', 'HANDOVER_TO_RUNNER_UP',
+    name='enum_auctions_status',
+    create_type=False # SANGAT KRUSIAL: Mencegah Python mengeksekusi CREATE TYPE di DB
+)
+
 class Auction(Base):
     """
     SHADOW MODEL: Induk Lelang. Digunakan Cronjob untuk evaluasi state/status.
@@ -80,7 +85,9 @@ class Auction(Base):
     end_time = Column(DateTime, nullable=False)
     increment = Column(Numeric(15, 2), nullable=False)
     current_price = Column(Numeric(15, 2), nullable=False, default=0)
-    status = Column(String, nullable=False, default='DRAFT')
+    
+    # Gunakan ENUM yang sudah didefinisikan di atas
+    status = Column(auction_status_enum, nullable=False, default='DRAFT')
 
 
 class AuctionBid(Base):
@@ -95,7 +102,6 @@ class AuctionBid(Base):
     user_id = Column(UUID(as_uuid=True), nullable=False)
     bid_amount = Column(Numeric(15, 2), nullable=False)
     status = Column(String, nullable=False, default='VALID')
-    # Tabel append-only ini hanya memiliki created_at
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class User(Base):
@@ -106,9 +112,3 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    # Tambahkan kolom ini jika Anda sudah menjalankan Fase 1 dari Roadmap Audit:
-    # auction_penalty_count = Column(Integer, nullable=False, default=0)
-    
-    # Kolom opsional lain yang mungkin worker butuhkan untuk notifikasi
-    # email = Column(String, nullable=False)
-    # name = Column(String, nullable=False)

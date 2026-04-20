@@ -30,8 +30,8 @@ class Order(Base):
     product_width = Column(Integer, nullable=False, default=0)
     product_height = Column(Integer, nullable=False, default=0)
 
-    created_at = Column("created_at", DateTime, default=datetime.utcnow)
-    updated_at = Column("updated_at", DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column("created_at", DateTime, default=datetime.now)
+    updated_at = Column("updated_at", DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class GradingRequest(Base):
@@ -45,8 +45,8 @@ class GradingRequest(Base):
     product_id = Column(UUID(as_uuid=True), nullable=False)
     status = Column(String, nullable=False)
     
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
 
 
 # ==========================================
@@ -67,7 +67,7 @@ class Product(Base):
 
 # DEFINISI ENUM POSTGRESQL (CRUCIAL FIX)
 auction_status_enum = ENUM(
-    'DRAFT', 'ACTIVE', 'FREEZE', 'EVALUATION', 'COMPLETED', 'FAILED', 'HANDOVER_TO_RUNNER_UP',
+    'SCHEDULED', 'ACTIVE', 'FREEZE', 'EVALUATION', 'COMPLETED', 'FAILED', 'HANDOVER_TO_RUNNER_UP',
     name='enum_auctions_status',
     create_type=False # SANGAT KRUSIAL: Mencegah Python mengeksekusi CREATE TYPE di DB
 )
@@ -102,7 +102,7 @@ class AuctionBid(Base):
     user_id = Column(UUID(as_uuid=True), nullable=False)
     bid_amount = Column(Numeric(15, 2), nullable=False)
     status = Column(String, nullable=False, default='VALID')
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now)
 
 class User(Base):
     """

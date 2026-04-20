@@ -9,7 +9,8 @@ from tasks.grading_tasks import expire_stale_grading_task # pyright: ignore[repo
 from tasks.auction_tasks import (
     task_freeze_nearing_auctions, 
     task_evaluate_winners, 
-    task_runner_up_handover
+    task_runner_up_handover,
+    task_start_scheduled_auctions  # ⚡ FIX: Import fungsi inisialisasi lelang
 )
 
 def setup_scheduler() -> AsyncIOScheduler:
@@ -49,7 +50,17 @@ def setup_scheduler() -> AsyncIOScheduler:
     # WORKER MODUL LELANG (AUCTION)
     # ==========================================
 
-    # Job 4: Freeze Lelang (Masa Tenang T-15s) - Interval 5 Detik untuk presisi tinggi
+    # ⚡ FIX: Job 4 - Memulai Lelang & Inisialisasi Redis (Interval 5 Detik)
+    scheduler.add_job(
+        task_start_scheduled_auctions,
+        trigger='interval',
+        seconds=5,
+        id='job_start_scheduled_auctions',
+        name='Start Scheduled Auctions Initializer',
+        replace_existing=True
+    )
+
+    # Job 5: Freeze Lelang (Masa Tenang T-15s) - Interval 5 Detik untuk presisi tinggi
     scheduler.add_job(
         task_freeze_nearing_auctions,
         trigger='interval',
@@ -59,7 +70,7 @@ def setup_scheduler() -> AsyncIOScheduler:
         replace_existing=True
     )
 
-    # Job 5: Evaluasi Pemenang Lelang - Interval 1 Menit
+    # Job 6: Evaluasi Pemenang Lelang - Interval 1 Menit
     scheduler.add_job(
         task_evaluate_winners,
         trigger='interval',
@@ -69,7 +80,7 @@ def setup_scheduler() -> AsyncIOScheduler:
         replace_existing=True
     )
 
-    # Job 6: SLA Handover ke Runner Up (Gagal bayar 24 Jam) - Interval 5 Menit
+    # Job 7: SLA Handover ke Runner Up (Gagal bayar 24 Jam) - Interval 5 Menit
     scheduler.add_job(
         task_runner_up_handover,
         trigger='interval',

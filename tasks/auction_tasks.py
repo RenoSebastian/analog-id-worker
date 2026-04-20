@@ -21,7 +21,50 @@ redis_client = redis.from_url(
 
 def _get_current_time():
     """Helper untuk mock/testing waktu"""
-    return datetime.utcnow()
+    return datetime.now()
+
+async def task_start_scheduled_auctions():
+    """
+    Cron: Berjalan setiap detik / menit.
+    Mencari lelang berstatus SCHEDULED yang start_time-nya sudah tercapai.
+    Mengubah status menjadi ACTIVE dan menginisialisasi state dasar di Redis.
+    """
+    async with AsyncSessionLocal() as db:
+        try:
+            now = _get_current_time()
+
+            # Mencari lelang yang sudah waktunya dimulai
+            stmt = select(Auction).where(
+                and_(
+                    Auction.status == 'SCHEDULED',
+                    Auction.start_time <= now
+                )
+            )
+            result = await db.execute(stmt)
+            auctions_to_start = result.scalars().all()
+
+            for auction in auctions_to_start:
+                auction_id = str(auction.id)
+                # Pastikan menggunakan start_price atau current_price sebagai pijakan awal
+                start_price = float(auction.current_price or auction.start_price)
+
+                # 1. Inisialisasi State di Redis Memory
+                # Harus sinkron dengan kebutuhan LUA Script di Node.js
+                await redis_client.set(f"auction:{auction_id}:price", start_price)
+                await redis_client.delete(f"auction:{auction_id}:winner")
+                await redis_client.delete(f"auction:{auction_id}:freeze")
+
+                # 2. Update status Postgres menjadi ACTIVE
+                auction.status = 'ACTIVE'
+                
+                logger.info(f"[START] Lelang {auction_id} diaktifkan. Redis state terinisialisasi di harga Rp{start_price}.")
+            
+            if auctions_to_start:
+                await db.commit() 
+
+        except Exception as e:
+            await db.rollback() 
+            logger.error(f"[START ERROR] Terjadi kesalahan saat mengaktifkan lelang: {str(e)}")
 
 async def task_freeze_nearing_auctions():
     """

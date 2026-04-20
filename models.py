@@ -4,6 +4,14 @@ from sqlalchemy import Column, Integer, String, DateTime, Boolean, Numeric
 from sqlalchemy.dialects.postgresql import UUID, ENUM
 from database import Base
 
+# DEFINISI ENUM ORDER STATUS UNTUK MENCEGAH TYPE MISMATCH
+order_status_enum = ENUM(
+    'pending_payment', 'paid', 'processing', 'shipped', 'delivered', 
+    'completed', 'cancelled', 'disputed',
+    name='enum_orders_status',
+    create_type=False # Mencegah pembuatan ulang tipe di database
+)
+
 class Order(Base):
     """
     SHADOW MODEL: Hanya untuk READ & WRITE operations status pesanan lelang/reguler.
@@ -12,9 +20,8 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    status = Column(String, nullable=False)
+    status = Column(order_status_enum, nullable=False)
     
-    # --- PENAMBAHAN KOLOM UNTUK MODUL LELANG (AUTO-ORDER) ---
     auction_id = Column(UUID(as_uuid=True), nullable=True)
     buyer_id = Column(UUID(as_uuid=True), nullable=False)
     store_id = Column(UUID(as_uuid=True), nullable=False)
@@ -24,79 +31,64 @@ class Order(Base):
     grand_total = Column(Numeric(12, 2), nullable=False)
     shipping_address = Column(String, nullable=False)
     
-    # Sinkronisasi Atribut Fisik Logistik
-    product_weight = Column(Integer, nullable=False, default=0)
-    product_length = Column(Integer, nullable=False, default=0)
-    product_width = Column(Integer, nullable=False, default=0)
-    product_height = Column(Integer, nullable=False, default=0)
-
     created_at = Column("created_at", DateTime, default=datetime.now)
     updated_at = Column("updated_at", DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class GradingRequest(Base):
-    """
-    SHADOW MODEL: Untuk pencarian (READ) dan penguncian baris.
-    """
     __tablename__ = "grading_requests"
-
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     buyer_id = Column(UUID(as_uuid=True), nullable=False)
     product_id = Column(UUID(as_uuid=True), nullable=False)
     status = Column(String, nullable=False)
-    
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
 
 
-# ==========================================
-# SHADOW MODELS UNTUK MODUL LELANG (BARU)
-# ==========================================
-
 class Product(Base):
-    """
-    SHADOW MODEL: Diperlukan untuk mengecek dan mengubah status is_locked
-    saat lelang dimulai, selesai, atau gagal.
-    """
+    # Kolom is_locked dihapus karena lelang sudah terpisah dari produk reguler
     __tablename__ = "products"
-
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     store_id = Column(UUID(as_uuid=True), nullable=False)
-    is_locked = Column(Boolean, nullable=False, default=False)
 
 
 # DEFINISI ENUM POSTGRESQL (CRUCIAL FIX)
 auction_status_enum = ENUM(
     'SCHEDULED', 'ACTIVE', 'FREEZE', 'EVALUATION', 'COMPLETED', 'FAILED', 'HANDOVER_TO_RUNNER_UP',
     name='enum_auctions_status',
-    create_type=False # SANGAT KRUSIAL: Mencegah Python mengeksekusi CREATE TYPE di DB
+    create_type=False
 )
 
 class Auction(Base):
     """
-    SHADOW MODEL: Induk Lelang. Digunakan Cronjob untuk evaluasi state/status.
+    SHADOW MODEL: Induk Lelang yang kini berdiri sendiri secara independen.
     """
     __tablename__ = "auctions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    product_id = Column(UUID(as_uuid=True), nullable=False)
+    
+    # --- DECOUPLED DARI PRODUCT ---
+    store_id = Column(UUID(as_uuid=True), nullable=False)
+    item_name = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    condition = Column(String, nullable=False, default='USED')
+    weight = Column(Integer, nullable=False, default=0)
+    length = Column(Integer, nullable=False, default=0)
+    width = Column(Integer, nullable=False, default=0)
+    height = Column(Integer, nullable=False, default=0)
+    # ------------------------------
+
     winner_id = Column(UUID(as_uuid=True), nullable=True)
     start_time = Column(DateTime, nullable=False)
     end_time = Column(DateTime, nullable=False)
     increment = Column(Numeric(15, 2), nullable=False)
-    current_price = Column(Numeric(15, 2), nullable=False, default=0)
+    current_price = Column(Numeric(15, 2), nullable=True)
     
-    # Gunakan ENUM yang sudah didefinisikan di atas
     status = Column(auction_status_enum, nullable=False, default='DRAFT')
 
 
 class AuctionBid(Base):
-    """
-    SHADOW MODEL: Histori Audit Log Lelang. 
-    Digunakan untuk menentukan Runner Up jika Pemenang Pertama gagal bayar.
-    """
     __tablename__ = "auction_bids"
-
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     auction_id = Column(UUID(as_uuid=True), nullable=False)
     user_id = Column(UUID(as_uuid=True), nullable=False)
@@ -104,11 +96,7 @@ class AuctionBid(Base):
     status = Column(String, nullable=False, default='VALID')
     created_at = Column(DateTime, default=datetime.now)
 
-class User(Base):
-    """
-    SHADOW MODEL: Tabel Users.
-    Diperlukan Worker untuk mengecek profil pemenang atau menambahkan penalti (Flagging).
-    """
-    __tablename__ = "users"
 
+class User(Base):
+    __tablename__ = "users"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

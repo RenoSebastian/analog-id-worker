@@ -7,7 +7,7 @@ from sqlalchemy import and_
 import redis.asyncio as redis 
 
 from database import AsyncSessionLocal
-from models import Auction, AuctionBid, Product, Order 
+from models import Auction, AuctionBid, Order 
 from config import settings 
 
 # Inisialisasi Logger
@@ -24,16 +24,10 @@ def _get_current_time():
     return datetime.now()
 
 async def task_start_scheduled_auctions():
-    """
-    Cron: Berjalan setiap detik / menit.
-    Mencari lelang berstatus SCHEDULED yang start_time-nya sudah tercapai.
-    Mengubah status menjadi ACTIVE dan menginisialisasi state dasar di Redis.
-    """
     async with AsyncSessionLocal() as db:
         try:
             now = _get_current_time()
 
-            # Mencari lelang yang sudah waktunya dimulai
             stmt = select(Auction).where(
                 and_(
                     Auction.status == 'SCHEDULED',
@@ -45,19 +39,16 @@ async def task_start_scheduled_auctions():
 
             for auction in auctions_to_start:
                 auction_id = str(auction.id)
-                # Pastikan menggunakan start_price atau current_price sebagai pijakan awal
-                start_price = float(auction.current_price or auction.start_price)
+                
+                final_start_price = float(auction.current_price) if auction.current_price else 0.0
 
-                # 1. Inisialisasi State di Redis Memory
-                # Harus sinkron dengan kebutuhan LUA Script di Node.js
-                await redis_client.set(f"auction:{auction_id}:price", start_price)
+                await redis_client.set(f"auction:{auction_id}:price", final_start_price)
                 await redis_client.delete(f"auction:{auction_id}:winner")
                 await redis_client.delete(f"auction:{auction_id}:freeze")
 
-                # 2. Update status Postgres menjadi ACTIVE
                 auction.status = 'ACTIVE'
                 
-                logger.info(f"[START] Lelang {auction_id} diaktifkan. Redis state terinisialisasi di harga Rp{start_price}.")
+                logger.info(f"[START] Lelang {auction_id} diaktifkan. Redis state terinisialisasi di harga Rp{final_start_price}.")
             
             if auctions_to_start:
                 await db.commit() 
@@ -66,12 +57,8 @@ async def task_start_scheduled_auctions():
             await db.rollback() 
             logger.error(f"[START ERROR] Terjadi kesalahan saat mengaktifkan lelang: {str(e)}")
 
+
 async def task_freeze_nearing_auctions():
-    """
-    Cron: Berjalan setiap detik / 5 detik.
-    Mencari lelang yang waktu end_time-nya tersisa <= 15 detik.
-    Mengunci (Freeze) di Redis agar Socket.io Node.js menolak bid baru.
-    """
     async with AsyncSessionLocal() as db:
         try:
             now = _get_current_time()
@@ -87,11 +74,8 @@ async def task_freeze_nearing_auctions():
             auctions_to_freeze = result.scalars().all()
 
             for auction in auctions_to_freeze:
-                # 1. Kunci State di Redis 
                 freeze_key = f"auction:{auction.id}:freeze"
                 await redis_client.set(freeze_key, '1')
-
-                # 2. Update status Postgres
                 auction.status = 'FREEZE'
                 
                 logger.info(f"[FREEZE] Lelang {auction.id} dikunci 15 detik sebelum berakhir.")
@@ -105,11 +89,6 @@ async def task_freeze_nearing_auctions():
 
 
 async def task_evaluate_winners():
-    """
-    Cron: Berjalan setiap menit.
-    Mengevaluasi lelang yang berstatus FREEZE dan waktunya sudah habis.
-    Menarik data pemenang dari Redis, membuat Order, dan sinkronisasi ke Postgres.
-    """
     async with AsyncSessionLocal() as db:
         try:
             now = _get_current_time()
@@ -126,32 +105,22 @@ async def task_evaluate_winners():
             for auction in evaluations:
                 auction_id = str(auction.id)
                 
-                # 1. Tarik Data Final dari Redis Memory
                 final_price = await redis_client.get(f"auction:{auction_id}:price")
                 winner_id = await redis_client.get(f"auction:{auction_id}:winner")
 
-                # Update status awal ke EVALUATION untuk mencegah double-processing
                 auction.status = 'EVALUATION'
                 await db.flush() 
 
                 if not winner_id:
                     auction.status = 'FAILED'
-                    
-                    prod_stmt = select(Product).where(Product.id == auction.product_id)
-                    prod_result = await db.execute(prod_stmt)
-                    product = prod_result.scalars().first()
-                    
-                    if product:
-                        product.is_locked = False
-                    
-                    logger.info(f"[EVALUATION] Lelang {auction_id} GAGAL (Tidak ada bid). Produk di-unlock.")
+                    # PERBAIKAN: Tidak perlu query product untuk unlock
+                    logger.info(f"[EVALUATION] Lelang {auction_id} GAGAL (Tidak ada bid).")
                 else:
                     final_price = float(final_price)
                     auction.winner_id = winner_id
                     auction.current_price = final_price
                     auction.status = 'COMPLETED'
 
-                    # Cari winning bid
                     bid_stmt = select(AuctionBid).where(
                         and_(
                             AuctionBid.auction_id == auction_id,
@@ -165,16 +134,12 @@ async def task_evaluate_winners():
                     if winning_bid:
                         winning_bid.status = 'WINNER'
 
-                    # Ambil produk untuk store_id
-                    prod_stmt = select(Product).where(Product.id == auction.product_id)
-                    prod_result = await db.execute(prod_stmt)
-                    product = prod_result.scalars().first()
-                    
+                    # PERBAIKAN: Store ID ditarik langsung dari objek auction (High Cohesion)
                     new_order = Order(
                         id=uuid.uuid4(),
                         auction_id=auction_id,
                         buyer_id=winner_id,
-                        store_id=product.store_id,
+                        store_id=auction.store_id, 
                         subtotal=final_price,
                         shipping_fee=0, 
                         grading_fee=0,
@@ -186,7 +151,6 @@ async def task_evaluate_winners():
                     
                     logger.info(f"[EVALUATION] Lelang {auction_id} SELESAI. Pemenang: {winner_id} - Rp{final_price}")
 
-                # 2. Cleanup Redis Memory 
                 keys_to_delete = await redis_client.keys(f"auction:{auction_id}:*")
                 if keys_to_delete:
                     await redis_client.delete(*keys_to_delete)
@@ -200,11 +164,6 @@ async def task_evaluate_winners():
 
 
 async def task_runner_up_handover():
-    """
-    Cron: Berjalan setiap 5 menit (SLA Monitor).
-    Mencari Order lelang yang berstatus 'pending_payment' lebih dari 24 jam.
-    Membatalkan order tersebut dan mengalihkan hak ke Bidder tertinggi kedua (Runner Up).
-    """
     async with AsyncSessionLocal() as db:
         try:
             sla_limit = _get_current_time() - timedelta(hours=24)
@@ -226,11 +185,9 @@ async def task_runner_up_handover():
                 auc_result = await db.execute(auc_stmt)
                 auction = auc_result.scalars().first()
 
-                # 1. Batalkan Order Pemenang Pertama
                 order.status = 'cancelled'
                 logger.info(f"[SLA_BREACH] Order {order.id} dibatalkan karena melebihi 24 jam pembayaran.")
 
-                # 2. Cari Runner Up
                 bid_stmt = select(AuctionBid).where(
                     and_(
                         AuctionBid.auction_id == auction_id,
@@ -249,15 +206,12 @@ async def task_runner_up_handover():
                     
                     runner_up_bid.status = 'RUNNER_UP'
 
-                    prod_stmt = select(Product).where(Product.id == auction.product_id)
-                    prod_result = await db.execute(prod_stmt)
-                    product = prod_result.scalars().first()
-                    
+                    # PERBAIKAN: Tarik store_id dari auction langsung
                     new_order = Order(
                         id=uuid.uuid4(),
                         auction_id=auction_id,
                         buyer_id=runner_up_bid.user_id,
-                        store_id=product.store_id,
+                        store_id=auction.store_id,
                         subtotal=runner_up_bid.bid_amount,
                         shipping_fee=0,
                         grading_fee=0,
@@ -269,13 +223,7 @@ async def task_runner_up_handover():
                     logger.info(f"[HANDOVER] Lelang {auction_id} dialihkan ke Runner Up: {runner_up_bid.user_id}")
                 else:
                     auction.status = 'FAILED'
-                    
-                    prod_stmt = select(Product).where(Product.id == auction.product_id)
-                    prod_result = await db.execute(prod_stmt)
-                    product = prod_result.scalars().first()
-                    
-                    if product:
-                        product.is_locked = False
+                    # PERBAIKAN: Tidak ada lagi produk untuk di-unlock
                     logger.info(f"[HANDOVER] Lelang {auction_id} GAGAL KESELURUHAN (Tidak ada runner up).")
 
             if expired_orders:

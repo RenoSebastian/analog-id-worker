@@ -42,9 +42,11 @@ async def task_start_scheduled_auctions():
                 
                 final_start_price = float(auction.current_price) if auction.current_price else 0.0
 
+                # PERBAIKAN TAHAP 2: Inisialisasi State Awal dan Pembersihan Data Kotor
                 await redis_client.set(f"auction:{auction_id}:price", final_start_price)
-                await redis_client.delete(f"auction:{auction_id}:winner")
                 await redis_client.delete(f"auction:{auction_id}:freeze")
+                await redis_client.delete(f"auction:{auction_id}:leaderboard") # Hapus ZSET lama
+                await redis_client.delete(f"auction:{auction_id}:history")     # Hapus List history lama
 
                 auction.status = 'ACTIVE'
                 
@@ -105,22 +107,32 @@ async def task_evaluate_winners():
             for auction in evaluations:
                 auction_id = str(auction.id)
                 
-                final_price = await redis_client.get(f"auction:{auction_id}:price")
-                winner_id = await redis_client.get(f"auction:{auction_id}:winner")
+                # PERBAIKAN TAHAP 2: Ekstraksi Pemenang Mutlak dari ZSET Leaderboard
+                # Mengambil peringkat 1 (index 0 ke 0) beserta nilainya
+                top_bidder_data = await redis_client.zrevrange(
+                    f"auction:{auction_id}:leaderboard", 0, 0, withscores=True
+                )
+
+                winner_id = None
+                final_price = 0.0
+
+                if top_bidder_data:
+                    # ZREVRANGE withscores mengembalikan tuple [(member, score)]
+                    winner_id = top_bidder_data[0][0]
+                    final_price = float(top_bidder_data[0][1])
 
                 auction.status = 'EVALUATION'
                 await db.flush() 
 
                 if not winner_id:
                     auction.status = 'FAILED'
-                    # PERBAIKAN: Tidak perlu query product untuk unlock
-                    logger.info(f"[EVALUATION] Lelang {auction_id} GAGAL (Tidak ada bid).")
+                    logger.info(f"[EVALUATION] Lelang {auction_id} GAGAL (Tidak ada bid di leaderboard).")
                 else:
-                    final_price = float(final_price)
                     auction.winner_id = winner_id
                     auction.current_price = final_price
                     auction.status = 'COMPLETED'
 
+                    # Sinkronisasi state memori pemenang ke persisten DB (Jika belum masuk DB)
                     bid_stmt = select(AuctionBid).where(
                         and_(
                             AuctionBid.auction_id == auction_id,
@@ -131,10 +143,20 @@ async def task_evaluate_winners():
                     bid_result = await db.execute(bid_stmt)
                     winning_bid = bid_result.scalars().first()
 
-                    if winning_bid:
+                    # Jika sistem belum mencatat log bid tertinggi ini ke tabel (karena micro-transactions hanya di Redis), buat record-nya
+                    if not winning_bid:
+                        winning_bid = AuctionBid(
+                            id=uuid.uuid4(),
+                            auction_id=auction_id,
+                            user_id=winner_id,
+                            bid_amount=final_price,
+                            status='WINNER'
+                        )
+                        db.add(winning_bid)
+                    else:
                         winning_bid.status = 'WINNER'
 
-                    # PERBAIKAN: Store ID ditarik langsung dari objek auction (High Cohesion)
+                    # Pembuatan Order Otomatis
                     new_order = Order(
                         id=uuid.uuid4(),
                         auction_id=auction_id,
@@ -149,8 +171,9 @@ async def task_evaluate_winners():
                     )
                     db.add(new_order)
                     
-                    logger.info(f"[EVALUATION] Lelang {auction_id} SELESAI. Pemenang: {winner_id} - Rp{final_price}")
+                    logger.info(f"[EVALUATION] Lelang {auction_id} SELESAI. Pemenang Mutlak: {winner_id} - Rp{final_price}")
 
+                # Pembersihan seluruh Memory Space milik lelang ini (Garbage Collection)
                 keys_to_delete = await redis_client.keys(f"auction:{auction_id}:*")
                 if keys_to_delete:
                     await redis_client.delete(*keys_to_delete)
@@ -206,7 +229,6 @@ async def task_runner_up_handover():
                     
                     runner_up_bid.status = 'RUNNER_UP'
 
-                    # PERBAIKAN: Tarik store_id dari auction langsung
                     new_order = Order(
                         id=uuid.uuid4(),
                         auction_id=auction_id,
@@ -223,7 +245,6 @@ async def task_runner_up_handover():
                     logger.info(f"[HANDOVER] Lelang {auction_id} dialihkan ke Runner Up: {runner_up_bid.user_id}")
                 else:
                     auction.status = 'FAILED'
-                    # PERBAIKAN: Tidak ada lagi produk untuk di-unlock
                     logger.info(f"[HANDOVER] Lelang {auction_id} GAGAL KESELURUHAN (Tidak ada runner up).")
 
             if expired_orders:

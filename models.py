@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Numeric
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Numeric, Text
 from sqlalchemy.dialects.postgresql import UUID, ENUM
 from database import Base
 
@@ -100,3 +100,66 @@ class AuctionBid(Base):
 class User(Base):
     __tablename__ = "users"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+
+# =========================================================================
+# ⚡ BARU: SHADOW MODELS UNTUK OTOMATISASI DISPUTE & REFUND
+# =========================================================================
+
+dispute_status_enum = ENUM(
+    'open', 'returning', 'arrived_at_seller', 'mediation',
+    'escalated', 'resolved', 'refund_failed',
+    name='enum_disputes_status',
+    create_type=False
+)
+
+class Dispute(Base):
+    """
+    SHADOW MODEL: Memantau sengketa pesanan untuk mengeksekusi SLA otomatis
+    """
+    __tablename__ = "disputes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    order_id = Column(UUID(as_uuid=True), nullable=False)
+    buyer_id = Column(UUID(as_uuid=True), nullable=False)
+    store_id = Column(UUID(as_uuid=True), nullable=False)
+    reason = Column(String, nullable=False)
+    return_tracking_number = Column(String, nullable=True)
+    status = Column(dispute_status_enum, nullable=False, default='open')
+    admin_decision_notes = Column(Text, nullable=True)
+
+    # Kolom SLA (Waktu Absolut)
+    accepted_at = Column(DateTime, nullable=True)
+    resi_submitted_at = Column(DateTime, nullable=True)
+    arrived_at = Column(DateTime, nullable=True)
+    mediation_start_at = Column(DateTime, nullable=True)
+
+    created_at = Column("created_at", DateTime, default=datetime.now)
+    updated_at = Column("updated_at", DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+refund_payout_status_enum = ENUM(
+    'pending', 'processing', 'completed', 'failed',
+    name='enum_refund_payouts_status',
+    create_type=False
+)
+
+class RefundPayout(Base):
+    """
+    SHADOW MODEL: Memantau antrean transfer gagal untuk fitur Retry Mechanism
+    """
+    __tablename__ = "refund_payouts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    dispute_id = Column(UUID(as_uuid=True), nullable=False)
+    order_id = Column(UUID(as_uuid=True), nullable=False)
+    buyer_id = Column(UUID(as_uuid=True), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    status = Column(refund_payout_status_enum, nullable=False, default='pending')
+    payout_method = Column(String, nullable=False)
+    external_payout_id = Column(String, nullable=True)
+    retry_count = Column(Integer, default=0)
+    error_log = Column(Text, nullable=True)
+
+    created_at = Column("created_at", DateTime, default=datetime.now)
+    updated_at = Column("updated_at", DateTime, default=datetime.now, onupdate=datetime.now)

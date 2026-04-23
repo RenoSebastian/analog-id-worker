@@ -13,6 +13,15 @@ from tasks.auction_tasks import (
     task_start_scheduled_auctions  # ⚡ FIX: Import fungsi inisialisasi lelang
 )
 
+# ⚡ BARU: Import Task Otomatisasi Dispute & Refund
+from tasks.dispute_tasks import (
+    check_admin_inactivity,
+    check_seller_unresponsive,
+    check_buyer_no_response,
+    check_mediation_deadlock,
+    retry_failed_refunds
+)
+
 def setup_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
 
@@ -87,6 +96,60 @@ def setup_scheduler() -> AsyncIOScheduler:
         minutes=5,
         id='job_runner_up_handover',
         name='Auction Runner Up Handover (SLA Monitor)',
+        replace_existing=True
+    )
+
+    # ==========================================
+    # ⚡ BARU: WORKER MODUL DISPUTE & REFUND
+    # ==========================================
+
+    # Job 8: SLA Inaktivitas Admin/Penjual setelah barang retur sampai (Setiap 1 Jam)
+    scheduler.add_job(
+        check_admin_inactivity,
+        trigger='interval',
+        hours=1,
+        id='job_dispute_admin_inactivity',
+        name='Dispute SLA: Admin/Seller Inactivity Checker',
+        replace_existing=True
+    )
+
+    # Job 9: SLA Penjual tidak merespon komplain awal (Setiap 1 Jam)
+    scheduler.add_job(
+        check_seller_unresponsive,
+        trigger='interval',
+        hours=1,
+        id='job_dispute_seller_unresponsive',
+        name='Dispute SLA: Seller Unresponsive Checker',
+        replace_existing=True
+    )
+
+    # Job 10: SLA Pembeli tidak memasukkan resi pengembalian (Setiap 1 Jam)
+    scheduler.add_job(
+        check_buyer_no_response,
+        trigger='interval',
+        hours=1,
+        id='job_dispute_buyer_no_response',
+        name='Dispute SLA: Buyer No-Response Checker',
+        replace_existing=True
+    )
+
+    # Job 11: SLA Mediasi menggantung/Deadlock (Setiap 12 Jam)
+    scheduler.add_job(
+        check_mediation_deadlock,
+        trigger='interval',
+        hours=12,
+        id='job_dispute_mediation_deadlock',
+        name='Dispute SLA: Mediation Deadlock Monitor',
+        replace_existing=True
+    )
+
+    # Job 12: Retry Pencairan Dana / Refund yang gagal di Payment Gateway (Setiap 10 Menit)
+    scheduler.add_job(
+        retry_failed_refunds,
+        trigger='interval',
+        minutes=10,
+        id='job_refund_retry_mechanism',
+        name='Refund Payout: Failed Transactions Retry Mechanism',
         replace_existing=True
     )
 
